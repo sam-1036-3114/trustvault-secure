@@ -28,9 +28,15 @@ function LoginForm() {
     setLoading(true);
 
     if (mode === 'signup') {
-      const { error } = await signUp(email, password, displayName);
+      const { error, needsConfirmation } = await signUp(email, password, displayName);
       if (error) {
         toast({ title: 'Sign Up Failed', description: error, variant: 'destructive' });
+        setLoading(false);
+        return;
+      }
+      if (needsConfirmation) {
+        toast({ title: 'Check your email', description: 'Confirm your account, then sign in to open your dashboard.' });
+        setMode('signin');
         setLoading(false);
         return;
       }

@@ -22,20 +22,20 @@ function getRequestCorrelationId(): string {
 
 export async function getSessionUser(): Promise<AuthUser | null> {
   const supabase = createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user) return null;
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) return null;
 
   const { data: profile } = await supabase
     .from('profiles')
     .select('*')
-    .eq('id', session.user.id)
+    .eq('id', user.id)
     .maybeSingle();
 
   if (!profile) return null;
 
   return {
-    id: session.user.id,
-    email: session.user.email || profile.email,
+    id: user.id,
+    email: user.email || profile.email,
     profile: profile as Profile,
   };
 }
@@ -45,8 +45,16 @@ export async function requireAuthenticatedUser(): Promise<AuthUser> {
   if (!user) {
     throw new AuthError('UNAUTHENTICATED', 'Authentication required');
   }
-  if (user.profile.status === 'suspended') {
+  if (user.profile.status !== 'active') {
     throw new AuthError('SUSPENDED', 'Account suspended');
+  }
+  return user;
+}
+
+export async function requireDocumentWriter(): Promise<AuthUser> {
+  const user = await requireAuthenticatedUser();
+  if (user.profile.role !== 'owner' && user.profile.role !== 'admin') {
+    throw new AuthError('FORBIDDEN', 'Owner or administrator access required');
   }
   return user;
 }
@@ -109,6 +117,10 @@ export async function authoriseDocumentOperation(
 ): Promise<void> {
   const correlationId = getRequestCorrelationId();
 
+  const writeOperations: DocumentOperation[] = ['edit', 'delete', 'manage_access', 'upload'];
+  if (writeOperations.includes(operation) && user.profile.role === 'viewer') {
+    throw new AuthError('FORBIDDEN', 'Viewer accounts have read-only access');
+  }
   let allowed = false;
   switch (operation) {
     case 'read':

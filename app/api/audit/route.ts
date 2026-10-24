@@ -22,7 +22,11 @@ export async function GET(req: NextRequest) {
     if (action) query = query.eq('action', action);
     if (outcome) query = query.eq('outcome', outcome);
 
-    const { data, count } = await query;
+    if (user.profile.role !== 'admin') {
+      query = query.or(`actor_id.eq.${user.id},target_user_id.eq.${user.id}`);
+    }
+    const { data, count, error } = await query;
+    if (error) throw error;
 
     const events = (data || []).filter((e: { actor_id: string | null; target_user_id: string | null }) => {
       if (user.profile.role === 'admin') return true;

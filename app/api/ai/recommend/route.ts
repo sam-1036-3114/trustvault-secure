@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuthenticatedUser, AuthError, canManageDocumentAccess } from '@/lib/auth';
+import { requireDocumentWriter, AuthError, canManageDocumentAccess } from '@/lib/auth';
 import { createServiceClient } from '@/lib/supabase-server';
 import { getDocumentForAuthorisedCheck } from '@/lib/auth';
 import { logAuditEvent } from '@/lib/audit';
@@ -7,7 +7,7 @@ import { headers } from 'next/headers';
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireAuthenticatedUser();
+    const user = await requireDocumentWriter();
     const body = await req.json();
     const { document_id, context } = body;
 

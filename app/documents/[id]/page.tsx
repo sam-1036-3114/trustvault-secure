@@ -66,7 +66,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
     }
   }, [user, id]);
 
-  const isOwner = doc?.owner_id === user?.id;
+  const isOwner = doc?.owner_id === user?.id && profile?.role !== 'viewer';
 
   const handleDownload = () => {
     window.location.href = `/api/documents/${id}/download`;

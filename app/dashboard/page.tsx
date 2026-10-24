@@ -21,6 +21,7 @@ export default function DashboardPage() {
     auditIntegrity: { is_valid: boolean; total_events: number } | null;
   } | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) router.push('/login');
@@ -28,11 +29,18 @@ export default function DashboardPage() {
   }, [loading, user, profile, router]);
 
   useEffect(() => {
-    if (user) {
+    if (user && profile?.status === 'active') {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      const load = async (url: string) => {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw new Error('Unable to load dashboard data');
+        return response.json();
+      };
       Promise.all([
-        fetch('/api/documents?pageSize=5').then(r => r.json()),
-        fetch('/api/audit?pageSize=5').then(r => r.json()),
-        fetch('/api/audit/verify').then(r => r.json()),
+        load('/api/documents?pageSize=5'),
+        load('/api/audit?pageSize=5'),
+        load('/api/audit/verify'),
       ]).then(([docsData, auditData, integrityData]) => {
         setStats({
           totalDocuments: docsData.total || 0,
@@ -42,9 +50,11 @@ export default function DashboardPage() {
           auditIntegrity: integrityData,
         });
         setDataLoading(false);
-      }).catch(() => setDataLoading(false));
+      }).catch(() => { setDataError(true); setDataLoading(false); })
+        .finally(() => clearTimeout(timeout));
+      return () => { clearTimeout(timeout); controller.abort(); };
     }
-  }, [user]);
+  }, [user, profile?.status]);
 
   if (loading || !user || !profile) {
     return (
@@ -54,11 +64,13 @@ export default function DashboardPage() {
     );
   }
 
+  if (profile.status !== 'active') return null;
+
   const cards = [
     { label: 'Total Documents', value: stats?.totalDocuments ?? 0, icon: FileText, color: 'text-primary' },
     { label: 'Recent Denied Access', value: stats?.deniedAttempts ?? 0, icon: AlertTriangle, color: 'text-warning' },
     { label: 'Audit Events', value: stats?.auditIntegrity?.total_events ?? 0, icon: Activity, color: 'text-primary' },
-    { label: 'Audit Integrity', value: stats?.auditIntegrity?.is_valid ? 'Verified' : 'Check', icon: Shield, color: stats?.auditIntegrity?.is_valid ? 'text-success' : 'text-destructive' },
+    { label: 'Audit Integrity', value: !stats?.auditIntegrity ? 'Unavailable' : stats.auditIntegrity.is_valid ? 'Verified' : 'Check', icon: Shield, color: stats?.auditIntegrity?.is_valid ? 'text-success' : 'text-destructive' },
   ];
 
   return (
@@ -68,6 +80,7 @@ export default function DashboardPage() {
         <p className="mt-1 text-muted-foreground">Here&apos;s an overview of your TrustVault activity</p>
       </div>
 
+      {dataError && <div role="alert" className="mb-6 rounded-md border p-4 text-sm">Dashboard data could not be loaded. <button className="text-primary underline" onClick={() => window.location.reload()}>Retry</button></div>}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {cards.map((card) => {
           const Icon = card.icon;
@@ -136,7 +149,7 @@ export default function DashboardPage() {
                   <span className="text-sm">Audit Chain Integrity</span>
                 </div>
                 <Badge variant={stats?.auditIntegrity?.is_valid ? 'default' : 'destructive'}>
-                  {stats?.auditIntegrity?.is_valid ? 'Valid' : 'Tampered'}
+                  {!stats?.auditIntegrity ? 'Unavailable' : stats.auditIntegrity.is_valid ? 'Valid' : 'Tampered'}
                 </Badge>
               </div>
               <div className="flex items-center justify-between">

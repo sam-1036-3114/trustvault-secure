@@ -1,6 +1,6 @@
 import { createServiceClient } from '@/lib/supabase-server';
 import { logAuditEvent } from '@/lib/audit';
-import { requireAuthenticatedUser, canReadDocument, canEditDocument, canManageDocumentAccess, AuthError } from '@/lib/auth';
+import { requireAuthenticatedUser, requireDocumentWriter, canReadDocument, canEditDocument, canManageDocumentAccess, AuthError } from '@/lib/auth';
 import {
   uploadSchema, updateDocumentSchema, grantPermissionSchema,
   isAllowedFileType, verifyFileSignature, isExecutableFile,
@@ -25,7 +25,7 @@ export async function uploadDocument(
   file: File,
   metadata: { title: string; description?: string; category?: string },
 ): Promise<{ document: Document | null; error: string | null }> {
-  const user = await requireAuthenticatedUser();
+  const user = await requireDocumentWriter();
   const correlationId = getCorrelationId();
 
   const parsed = uploadSchema.safeParse(metadata);
@@ -161,9 +161,17 @@ export async function listDocuments(params: {
   const pageSize = params.pageSize || 20;
   const offset = (page - 1) * pageSize;
 
+  const { data: grants, error: grantsError } = await serviceClient.from('document_permissions')
+    .select('document_id, access_level').eq('user_id', user.id).eq('granted', true);
+  if (grantsError) throw grantsError;
+  const sharedIds = (grants || []).map(g => g.document_id);
+
   let query = serviceClient
     .from('documents')
-    .select('*, document_permissions!inner(access_level, granted, user_id)', { count: 'exact' });
+    .select('*', { count: 'exact' });
+  query = sharedIds.length
+    ? query.or(`owner_id.eq.${user.id},id.in.(${sharedIds.join(',')})`)
+    : query.eq('owner_id', user.id);
 
   if (params.search) {
     query = query.or(`title.ilike.%${params.search}%,description.ilike.%${params.search}%`);
@@ -176,17 +184,16 @@ export async function listDocuments(params: {
     .order('created_at', { ascending: false })
     .range(offset, offset + pageSize - 1);
 
-  const { data, count } = await query;
+  const { data, count, error } = await query;
+  if (error) throw error;
 
   const visibleDocs: (Document & { owner_email?: string; owner_name?: string; access_level?: string })[] = [];
   if (data) {
     for (const doc of data) {
       const d = doc as Document & { document_permissions?: DocumentPermission[] };
       const isOwner = d.owner_id === user.id;
-      const perm = d.document_permissions?.find(
-        (p) => p.user_id === user.id && p.granted === true,
-      );
-      if (isOwner || perm || user.profile.role === 'admin') {
+      const perm = grants?.find(p => p.document_id === d.id);
+      if (isOwner || perm) {
         const { data: ownerProfile } = await serviceClient
           .from('profiles')
           .select('email, display_name')
@@ -329,7 +336,7 @@ export async function updateDocumentMetadata(
   documentId: string,
   updates: { title?: string; description?: string; category?: string },
 ): Promise<{ document: Document | null; error: string | null }> {
-  const user = await requireAuthenticatedUser();
+  const user = await requireDocumentWriter();
   const correlationId = getCorrelationId();
   const serviceClient = createServiceClient();
 
@@ -386,7 +393,7 @@ export async function updateDocumentMetadata(
 }
 
 export async function deleteDocument(documentId: string): Promise<{ error: string | null }> {
-  const user = await requireAuthenticatedUser();
+  const user = await requireDocumentWriter();
   const correlationId = getCorrelationId();
   const serviceClient = createServiceClient();
 
@@ -442,7 +449,7 @@ export async function grantPermission(
   targetUserId: string,
   accessLevel: 'read' | 'edit',
 ): Promise<{ error: string | null }> {
-  const user = await requireAuthenticatedUser();
+  const user = await requireDocumentWriter();
   const correlationId = getCorrelationId();
   const serviceClient = createServiceClient();
 
@@ -535,7 +542,7 @@ export async function revokePermission(
   documentId: string,
   targetUserId: string,
 ): Promise<{ error: string | null }> {
-  const user = await requireAuthenticatedUser();
+  const user = await requireDocumentWriter();
   const correlationId = getCorrelationId();
   const serviceClient = createServiceClient();
 
