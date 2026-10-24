@@ -59,7 +59,7 @@ export default function AdminUsersPage() {
           <UserCog className="h-6 w-6" />
           User Management
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">Manage user roles and account status</p>
+        <p className="mt-1 text-sm text-muted-foreground">Admins manage users and security. Owners upload and manage their documents. Viewers read and download shared documents.</p>
       </div>
 
       {dataLoading ? (

@@ -113,8 +113,8 @@ export default function DocumentsPage() {
           <p className="mt-1 text-sm text-muted-foreground">{total} document{total !== 1 ? 's' : ''}</p>
         </div>
         <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-          <DialogTrigger asChild>
-            <Button className="gap-2">
+          <DialogTrigger asChild disabled={profile.role === 'viewer'}>
+            <Button className="gap-2" disabled={profile.role === 'viewer'}>
               <Upload className="h-4 w-4" />
               Upload
             </Button>

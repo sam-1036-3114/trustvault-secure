@@ -35,11 +35,11 @@ TrustVault is a full-stack enterprise security application built for the Snovasy
 
 | Operation | Admin | Owner | Viewer with Read | Viewer with Edit |
 |-----------|-------|-------|-----------------|-----------------|
-| View document metadata | Yes (admin dashboard) | Own docs | Granted docs | Granted docs |
+| View document metadata | Own or granted docs | Own or granted docs | Granted docs | Granted docs |
 | Download document | No (unless granted) | Own docs | Granted docs | Granted docs |
-| Edit document metadata | No | Own docs | No | Granted docs |
-| Delete document | No | Own docs | No | No |
-| Grant/revoke access | No | Own docs | No | No |
+| Edit document metadata | Own or edit-granted docs | Own or edit-granted docs | No | No |
+| Delete document | Own docs | Own docs | No | No |
+| Grant/revoke access | Own docs | Own docs | No | No |
 | Manage users | Yes | No | No | No |
 
 ### How Access Is Checked
@@ -105,16 +105,34 @@ cp .env.example .env.local
 
 Required variables:
 - `NEXT_PUBLIC_SUPABASE_URL` — your Supabase project URL
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase anon key
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — Supabase public publishable key (preferred); `NEXT_PUBLIC_SUPABASE_ANON_KEY` remains supported for legacy projects
 - `SUPABASE_SERVICE_ROLE_KEY` — Supabase service role key (server-only)
 - `SUPABASE_DB_URL` — PostgreSQL connection string
 
 ### 3. Apply Database Migrations
-Migrations are applied via the Supabase MCP tools. The migration files are in `supabase/migrations/`:
+Apply the SQL migrations in filename order using your existing Supabase migration workflow. The migration files are in `supabase/migrations/`:
 1. `000_pgcrypto_extension.sql` — enables pgcrypto for SHA-256
 2. `001_core_tables.sql` — profiles, organisation_settings, document_permissions, audit_events, audit_chain_heads, security_alerts + SECURITY DEFINER functions
 3. `002_documents_and_versions.sql` — documents, document_versions + RLS policies
 4. `003_storage_bucket.sql` — private storage bucket
+5. `004_fix_column_level_role_protection.sql` — prevents users changing their own role or account status
+6. `005_enforce_document_roles.sql` — restores missing profiles as Viewers and enforces active Owner/Admin document writes
+
+Existing sites must also apply the new `20261024180000_005_enforce_document_roles.sql` migration to their Supabase database. New accounts remain Viewers until an administrator changes their role in `/admin/users`. Viewer accounts cannot edit, even if an older document grant says `edit`.
+
+### Fix “Unable to open your account” on a new database
+
+If the profile API returns `PGRST205`, Supabase cannot find the `profiles` table in its API schema. Signing in alone does not create the application tables.
+
+1. Open the Supabase project used by this site's public Supabase settings, then open **SQL Editor**.
+2. Open [`supabase/setup.sql`](supabase/setup.sql), copy its entire contents into a new SQL query, and run it. This combines all six existing migrations in order, creates the application tables and signup trigger, and restores missing profiles as Viewers. It preserves existing roles and account statuses. Use the individual migrations instead if you already manage migration history with the Supabase CLI.
+3. Return to the app and select **Retry**.
+4. In Netlify's project environment settings, configure the server-only `SUPABASE_SERVICE_ROLE_KEY` for this same Supabase project if it is missing, then redeploy. Document, audit, and admin endpoints require it. Do not put it in a public variable or share it in chat.
+5. Assign the first administrator as described below. Subsequent roles are managed at `/admin/users`.
+
+If the table already exists, verify that the app points to the intended Supabase project and that the public schema is exposed in the Supabase Data API settings.
+
+To regenerate the SQL file after changing migrations, run `node scripts/generate-supabase-setup.mjs`.
 
 ### 4. Create the First Administrator
 1. Sign up via the app's `/login?mode=signup` page
