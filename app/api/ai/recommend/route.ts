@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
 
-    const canManage = await canManageDocumentAccess(user.id, document);
+    const canManage = await canManageDocumentAccess(user, document);
     if (!canManage) {
       await logAuditEvent({
         actor_id: user.id,

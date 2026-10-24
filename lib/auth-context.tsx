@@ -1,5 +1,6 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
 import { Session, User, AuthError as SupabaseAuthError } from '@supabase/supabase-js';
 import { getBrowserClient } from '@/lib/supabase-browser';
@@ -27,9 +28,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const supabase = getBrowserClient();
+  const pathname = usePathname();
+  const publicPage = ['/login', '/forgot-password', '/reset-password', '/'].includes(pathname);
 
   const fetchProfile = useCallback(async (userId: string) => {
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+    let { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+    if (!error && !data) {
+      const recovery = await supabase.rpc('ensure_current_profile').maybeSingle();
+      data = recovery.data;
+      error = recovery.error;
+    }
     const message = profileLoadMessage(error, !!data);
     if (message) throw new Error(message);
     return data as Profile;
@@ -103,22 +111,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [supabase, fetchProfile]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error?.message || null };
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) return { error: error.message };
+      const audit = await fetch('/api/auth/session', { method: 'POST' });
+      if (!audit.ok) return { error: 'Signed in, but account verification could not finish. Please retry.' };
+      return { error: null };
+    } catch { return { error: 'Unable to connect. Please try again.' }; }
   }, [supabase]);
 
   const signUp = useCallback(async (email: string, password: string, displayName: string) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { display_name: displayName } },
+      options: { data: { display_name: displayName }, emailRedirectTo: `${window.location.origin}/auth/callback` },
     });
     if (error) return { error: error.message };
     return { error: null, needsConfirmation: !data.session };
   }, [supabase]);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await fetch('/api/auth/signout', { method: 'POST' }).catch(() => undefined);
+    await supabase.auth.signOut({ scope: 'local' });
     setUser(null);
     setProfile(null);
     setSession(null);
@@ -131,7 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider value={{ user, profile, session, loading, authError, signIn, signUp, signOut, refreshProfile }}>
-      {authError ? (
+      {authError && !publicPage ? (
         <div className="flex min-h-screen items-center justify-center p-6">
           <div className="w-full max-w-md space-y-4 rounded-lg border bg-card p-6" role="alert">
             <h1 className="text-xl font-semibold">Unable to open your account</h1>

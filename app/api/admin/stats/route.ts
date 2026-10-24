@@ -18,20 +18,23 @@ export async function GET() {
         verifyAuditIntegrity(),
       ]);
 
-    const { data: recentUploads } = await serviceClient
+    for (const result of [docsResult, usersResult, deniedResult, permChangesResult, alertsResult]) { if (result.error) throw result.error; }
+
+    const { data: recentUploads, error: uploadsError } = await serviceClient
       .from('audit_events')
       .select('*')
       .eq('action', 'document_upload')
       .order('event_timestamp', { ascending: false })
       .limit(5);
 
-    const { data: recentDenied } = await serviceClient
+    const { data: recentDenied, error: deniedError } = await serviceClient
       .from('audit_events')
       .select('*')
       .eq('outcome', 'denied')
       .order('event_timestamp', { ascending: false })
       .limit(10);
 
+    if (uploadsError || deniedError) throw new Error('Security data unavailable');
     return NextResponse.json({
       totalDocuments: docsResult.count || 0,
       activeUsers: usersResult.count || 0,

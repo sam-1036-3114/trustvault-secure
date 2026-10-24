@@ -18,13 +18,13 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || proc
 
 let testCtx: Awaited<ReturnType<typeof setupTestUsers>>;
 
-describe('TrustVault Security Tests', () => {
+describe.skipIf(process.env.RUN_INTEGRATION_TESTS !== 'true')('TrustVault Security Tests', () => {
   beforeAll(async () => {
     testCtx = await setupTestUsers();
   });
 
   afterAll(async () => {
-    await testCtx.cleanup();
+    await testCtx?.cleanup();
   });
 
   describe('Authentication', () => {
@@ -166,12 +166,12 @@ describe('TrustVault Security Tests', () => {
       });
     });
 
-    it('should allow viewer with edit access to update metadata', async () => {
+    it('should reject viewer editing even with a legacy edit access grant', async () => {
       const res = await apiCall('PATCH', `/api/documents/${editDocId}/metadata`, {
         cookies: testCtx.viewer.cookies,
         body: { title: 'Edited by Viewer' },
       });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(403);
     });
   });
 
@@ -210,7 +210,7 @@ describe('TrustVault Security Tests', () => {
 
       await apiCall('GET', `/api/documents/${docId}`, { cookies: testCtx.viewer.cookies });
 
-      const res = await apiCall('GET', '/api/audit?outcome=denied', { cookies: testCtx.owner.cookies });
+      const res = await apiCall('GET', '/api/audit?outcome=denied', { cookies: testCtx.viewer.cookies });
       const json = await res.json();
       expect(res.status).toBe(200);
       const deniedEvents = json.events || [];

@@ -25,13 +25,18 @@ export async function getSessionUser(): Promise<AuthUser | null> {
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) return null;
 
-  const { data: profile } = await supabase
+  let { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', user.id)
     .maybeSingle();
 
-  if (!profile) return null;
+  if (!profileError && !profile) {
+    const recovery = await supabase.rpc('ensure_current_profile').maybeSingle();
+    profile = recovery.data;
+    profileError = recovery.error;
+  }
+  if (profileError || !profile) return null;
 
   return {
     id: user.id,
@@ -54,6 +59,7 @@ export async function requireAuthenticatedUser(): Promise<AuthUser> {
 export async function requireDocumentWriter(): Promise<AuthUser> {
   const user = await requireAuthenticatedUser();
   if (user.profile.role !== 'owner' && user.profile.role !== 'admin') {
+    await logAuditEvent({ actor_id: user.id, action: 'document_write_denied', outcome: 'denied' });
     throw new AuthError('FORBIDDEN', 'Owner or administrator access required');
   }
   return user;
@@ -74,40 +80,41 @@ export async function requireAdministrator(): Promise<AuthUser> {
   return user;
 }
 
-export async function canReadDocument(userId: string, document: Document): Promise<boolean> {
-  if (document.owner_id === userId) return true;
-  if (document.status === 'deleted') return false;
+export async function canReadDocument(user: AuthUser, document: Document): Promise<boolean> {
+  if (user.profile.status !== 'active' || document.status === 'deleted') return false;
+  if (document.owner_id === user.id && user.profile.role !== 'viewer') return true;
 
   const serviceClient = createServiceClient();
   const { data } = await serviceClient
     .from('document_permissions')
     .select('granted')
     .eq('document_id', document.id)
-    .eq('user_id', userId)
+    .eq('user_id', user.id)
     .eq('granted', true)
     .maybeSingle();
 
   return !!data;
 }
 
-export async function canEditDocument(userId: string, document: Document): Promise<boolean> {
-  if (document.owner_id === userId) return true;
-  if (document.status === 'deleted') return false;
+export async function canEditDocument(user: AuthUser, document: Document): Promise<boolean> {
+  if (user.profile.role === 'viewer') return false;
+  if (user.profile.status !== 'active' || document.status === 'deleted') return false;
+  if (document.owner_id === user.id) return true;
 
   const serviceClient = createServiceClient();
   const { data } = await serviceClient
     .from('document_permissions')
     .select('access_level, granted')
     .eq('document_id', document.id)
-    .eq('user_id', userId)
+    .eq('user_id', user.id)
     .eq('granted', true)
     .maybeSingle();
 
   return data?.access_level === 'edit';
 }
 
-export async function canManageDocumentAccess(userId: string, document: Document): Promise<boolean> {
-  return document.owner_id === userId;
+export async function canManageDocumentAccess(user: AuthUser, document: Document): Promise<boolean> {
+  return user.profile.status === 'active' && user.profile.role !== 'viewer' && document.status !== 'deleted' && document.owner_id === user.id;
 }
 
 export async function authoriseDocumentOperation(
@@ -126,14 +133,14 @@ export async function authoriseDocumentOperation(
     case 'read':
     case 'preview':
     case 'download':
-      allowed = await canReadDocument(user.id, document);
+      allowed = await canReadDocument(user, document);
       break;
     case 'edit':
-      allowed = await canEditDocument(user.id, document);
+      allowed = await canEditDocument(user, document);
       break;
     case 'delete':
     case 'manage_access':
-      allowed = await canManageDocumentAccess(user.id, document);
+      allowed = await canManageDocumentAccess(user, document);
       break;
     case 'upload':
       allowed = true;

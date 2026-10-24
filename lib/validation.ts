@@ -67,7 +67,7 @@ export function isAllowedFileType(filename: string, declaredMimeType: string): b
 
   const expectedMimes = mimeMap[ext];
   if (expectedMimes && expectedMimes.length > 0) {
-    if (!expectedMimes.some(m => declaredMimeType.includes(m))) return false;
+    if (!expectedMimes.includes(declaredMimeType.toLowerCase())) return false;
   }
 
   return true;
@@ -95,7 +95,19 @@ export function sanitizeFilename(filename: string): string {
 }
 
 export function generateStorageKey(userId: string, extension: string): string {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 10);
-  return `${userId}/${timestamp}-${random}.${extension}`;
+  return `${userId}/${crypto.randomUUID()}.${extension}`;
+}
+
+export function pagination(page: unknown, pageSize: unknown, defaultSize = 20) {
+  const parsedPage = Number(page ?? 1);
+  const parsedSize = Number(pageSize ?? defaultSize);
+  return {
+    page: Number.isSafeInteger(parsedPage) && parsedPage > 0 ? Math.min(parsedPage, 100000) : 1,
+    pageSize: Number.isSafeInteger(parsedSize) && parsedSize > 0 ? Math.min(parsedSize, 100) : defaultSize,
+  };
+}
+
+export function safeSearch(input: string): string {
+  // These characters are PostgREST grammar, not search content.
+  return input.trim().slice(0, 200).replace(/[^\p{L}\p{N} @._-]/gu, ' ');
 }

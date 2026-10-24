@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { createServerClient } from '@supabase/ssr';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
@@ -37,12 +38,16 @@ export async function setUserRole(userId: string, role: string) {
 }
 
 export async function getTestSession(email: string, password: string) {
-  const client = makeAnonClient();
+  const jar = new Map<string, string>();
+  const client = createServerClient(supabaseUrl, supabaseAnonKey, { cookies: {
+    getAll: () => Array.from(jar, ([name, value]) => ({ name, value })),
+    setAll: changes => changes.forEach(({ name, value }) => jar.set(name, value)),
+  } });
   const { data, error } = await client.auth.signInWithPassword({ email, password });
   if (error) throw new Error(`Failed to sign in as ${email}: ${error.message}`);
   return {
     session: data.session!,
-    cookies: `sb-access-token=${data.session!.access_token}; sb-refresh-token=${data.session!.refresh_token}`,
+    cookies: Array.from(jar, ([name, value]) => `${name}=${encodeURIComponent(value)}`).join('; '),
   };
 }
 
@@ -51,7 +56,7 @@ export async function apiCall(
   path: string,
   options: { cookies?: string; body?: any; headers?: Record<string, string> } = {}
 ) {
-  const baseUrl = `http://localhost:3000`;
+  const baseUrl = process.env.TEST_BASE_URL || 'http://localhost:8889';
   const headers: Record<string, string> = {
     ...options.headers,
   };

@@ -1,3 +1,4 @@
+import { pagination } from '@/lib/validation';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthenticatedUser, requireAdministrator, AuthError } from '@/lib/auth';
 import { createServiceClient } from '@/lib/supabase-server';
@@ -7,8 +8,7 @@ export async function GET(req: NextRequest) {
     const user = await requireAuthenticatedUser();
     const serviceClient = createServiceClient();
     const searchParams = req.nextUrl.searchParams;
-    const page = parseInt(searchParams.get('page') || '1');
-    const pageSize = parseInt(searchParams.get('pageSize') || '50');
+    const { page, pageSize } = pagination(searchParams.get('page') ?? undefined, searchParams.get('pageSize') ?? undefined, 50);
     const offset = (page - 1) * pageSize;
     const action = searchParams.get('action');
     const outcome = searchParams.get('outcome');
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ events, total: count || 0 });
   } catch (err) {
     if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: 401 });
+      return NextResponse.json({ error: err.message }, { status: err.code === 'UNAUTHENTICATED' ? 401 : 403 });
     }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

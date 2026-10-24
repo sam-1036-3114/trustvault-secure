@@ -27,6 +27,7 @@ function LoginForm() {
     e.preventDefault();
     setLoading(true);
 
+    try {
     if (mode === 'signup') {
       const { error, needsConfirmation } = await signUp(email, password, displayName);
       if (error) {
@@ -51,6 +52,9 @@ function LoginForm() {
       }
       router.push('/dashboard');
     }
+    } catch {
+      toast({ title: 'Connection failed', description: 'Please try again.', variant: 'destructive' });
+    } finally { setLoading(false); }
   };
 
   return (
@@ -65,6 +69,8 @@ function LoginForm() {
           <CardTitle>{mode === 'signin' ? 'Sign In' : 'Create Account'}</CardTitle>
         </CardHeader>
         <CardContent>
+          {searchParams.get('error') === 'confirmation' && <p role="alert" className="mb-4 text-sm text-destructive">This confirmation link is invalid or expired. Please request a new link.</p>}
+          {searchParams.get('reset') === 'success' && <p role="status" className="mb-4 text-sm">Password updated. Sign in with your new password.</p>}
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'signup' && (
               <div className="space-y-2">
@@ -108,6 +114,7 @@ function LoginForm() {
             </Button>
           </form>
 
+          <Link href="/forgot-password" className="mt-4 block text-center text-sm text-primary underline">Forgot your password?</Link>
           <div className="mt-4 text-center text-sm text-muted-foreground">
             {mode === 'signin' ? (
               <>

@@ -5,7 +5,7 @@ import {
   uploadSchema, updateDocumentSchema, grantPermissionSchema,
   isAllowedFileType, verifyFileSignature, isExecutableFile,
   getFileExtension, sanitizeFilename, generateStorageKey,
-  MAX_FILE_SIZE,
+  MAX_FILE_SIZE, pagination, safeSearch,
 } from '@/lib/validation';
 import type { Document, DocumentPermission, Profile, DocumentVersion } from '@/lib/types';
 import { headers } from 'next/headers';
@@ -27,6 +27,9 @@ export async function uploadDocument(
 ): Promise<{ document: Document | null; error: string | null }> {
   const user = await requireDocumentWriter();
   const correlationId = getCorrelationId();
+  const { data: settings, error: settingsError } = await createServiceClient().from('organisation_settings').select('max_file_size_bytes, allowed_file_types').eq('id', 1).single();
+  if (settingsError || !settings) throw new Error('Upload settings unavailable');
+  const maxSize = Math.min(MAX_FILE_SIZE, settings.max_file_size_bytes);
 
   const parsed = uploadSchema.safeParse(metadata);
   if (!parsed.success) {
@@ -40,19 +43,19 @@ export async function uploadDocument(
     return { document: null, error: parsed.error.issues[0]?.message || 'Invalid metadata' };
   }
 
-  if (file.size > MAX_FILE_SIZE) {
+  if (file.size === 0 || file.size > maxSize) {
     await logAuditEvent({
       actor_id: user.id,
       action: 'document_upload_size_exceeded',
       outcome: 'denied',
       request_id: correlationId,
-      metadata: { file_size: file.size, max_size: MAX_FILE_SIZE },
+      metadata: { file_size: file.size, max_size: maxSize },
     });
-    return { document: null, error: `File exceeds maximum size of ${MAX_FILE_SIZE / 1024 / 1024}MB` };
+    return { document: null, error: `File must contain data and be no larger than ${maxSize / 1024 / 1024}MB` };
   }
 
   const ext = getFileExtension(file.name);
-  if (!isAllowedFileType(file.name, file.type)) {
+  if (!settings.allowed_file_types.includes(ext) || !isAllowedFileType(file.name, file.type)) {
     await logAuditEvent({
       actor_id: user.id,
       action: 'document_upload_type_rejected',
@@ -125,7 +128,7 @@ export async function uploadDocument(
 
   const document = docData as Document;
 
-  await serviceClient.from('document_versions').insert({
+  const { error: versionError } = await serviceClient.from('document_versions').insert({
     document_id: document.id,
     version_number: 1,
     file_name: safeFilename,
@@ -135,6 +138,12 @@ export async function uploadDocument(
     uploaded_by: user.id,
     change_summary: 'Initial upload',
   });
+
+  if (versionError) {
+    await serviceClient.from('documents').delete().eq('id', document.id);
+    await serviceClient.storage.from(STORAGE_BUCKET).remove([storageKey]);
+    return { document: null, error: 'Failed to create document version' };
+  }
 
   await logAuditEvent({
     actor_id: user.id,
@@ -157,8 +166,7 @@ export async function listDocuments(params: {
 }): Promise<{ documents: (Document & { owner_email?: string; owner_name?: string; access_level?: string })[]; total: number }> {
   const user = await requireAuthenticatedUser();
   const serviceClient = createServiceClient();
-  const page = params.page || 1;
-  const pageSize = params.pageSize || 20;
+  const { page, pageSize } = pagination(params.page, params.pageSize);
   const offset = (page - 1) * pageSize;
 
   const { data: grants, error: grantsError } = await serviceClient.from('document_permissions')
@@ -169,12 +177,17 @@ export async function listDocuments(params: {
   let query = serviceClient
     .from('documents')
     .select('*', { count: 'exact' });
-  query = sharedIds.length
-    ? query.or(`owner_id.eq.${user.id},id.in.(${sharedIds.join(',')})`)
-    : query.eq('owner_id', user.id);
+  if (user.profile.role === 'viewer') {
+    if (!sharedIds.length) return { documents: [], total: 0 };
+    query = query.in('id', sharedIds);
+  } else {
+    query = sharedIds.length
+      ? query.or(`owner_id.eq.${user.id},id.in.(${sharedIds.join(',')})`)
+      : query.eq('owner_id', user.id);
+  }
 
   if (params.search) {
-    query = query.or(`title.ilike.%${params.search}%,description.ilike.%${params.search}%`);
+    query = query.or(`title.ilike.%${safeSearch(params.search)}%,description.ilike.%${safeSearch(params.search)}%`);
   }
   if (params.category && params.category !== 'all') {
     query = query.eq('category', params.category);
@@ -191,7 +204,7 @@ export async function listDocuments(params: {
   if (data) {
     for (const doc of data) {
       const d = doc as Document & { document_permissions?: DocumentPermission[] };
-      const isOwner = d.owner_id === user.id;
+      const isOwner = d.owner_id === user.id && user.profile.role !== 'viewer';
       const perm = grants?.find(p => p.document_id === d.id);
       if (isOwner || perm) {
         const { data: ownerProfile } = await serviceClient
@@ -203,7 +216,7 @@ export async function listDocuments(params: {
           ...d,
           owner_email: ownerProfile?.email,
           owner_name: ownerProfile?.display_name,
-          access_level: isOwner ? 'owner' : perm?.access_level,
+          access_level: isOwner ? 'owner' : user.profile.role === 'viewer' ? 'read' : perm?.access_level,
         });
       }
     }
@@ -214,6 +227,7 @@ export async function listDocuments(params: {
 
 export async function getDocumentDetail(documentId: string): Promise<{
   document: Document | null;
+  canEdit?: boolean;
   owner: Profile | null;
   permissions: DocumentPermission[];
   versions: DocumentVersion[];
@@ -234,7 +248,7 @@ export async function getDocumentDetail(documentId: string): Promise<{
 
   const document = doc as Document;
 
-  const hasAccess = await canReadDocument(user.id, document);
+  const hasAccess = await canReadDocument(user, document);
   if (!hasAccess) {
     await logAuditEvent({
       actor_id: user.id,
@@ -253,8 +267,9 @@ export async function getDocumentDetail(documentId: string): Promise<{
     serviceClient.from('document_versions').select('*').eq('document_id', documentId).order('version_number', { ascending: false }),
   ]);
 
-  const canManage = await canManageDocumentAccess(user.id, document);
-  const permissions = canManage ? (permResult.data as DocumentPermission[]) : [];
+  const canManage = await canManageDocumentAccess(user, document);
+  const permissions = canManage ? (await getDocumentPermissions(documentId)).permissions : [];
+  if (ownerResult.error || permResult.error || versionResult.error) throw new Error('Document details unavailable');
 
   await logAuditEvent({
     actor_id: user.id,
@@ -267,6 +282,7 @@ export async function getDocumentDetail(documentId: string): Promise<{
 
   return {
     document,
+    canEdit: await canEditDocument(user, document),
     owner: ownerResult.data as Profile | null,
     permissions,
     versions: (versionResult.data as DocumentVersion[]) || [],
@@ -304,8 +320,9 @@ export async function downloadDocument(documentId: string): Promise<{
 
   const document = doc as Document;
 
-  const hasAccess = await canReadDocument(user.id, document);
+  const hasAccess = await canReadDocument(user, document);
   if (!hasAccess) {
+    await logAuditEvent({ actor_id: user.id, action: 'document_download_denied', document_id: documentId, outcome: 'denied' });
     return { data: null, contentType: '', fileName: '', error: 'Access denied' };
   }
 
@@ -356,7 +373,7 @@ export async function updateDocumentMetadata(
   }
 
   const document = doc as Document;
-  const canEdit = await canEditDocument(user.id, document);
+  const canEdit = await canEditDocument(user, document);
   if (!canEdit) {
     await logAuditEvent({
       actor_id: user.id,
@@ -409,7 +426,7 @@ export async function deleteDocument(documentId: string): Promise<{ error: strin
 
   const document = doc as Document;
 
-  if (document.owner_id !== user.id) {
+  if (!await canManageDocumentAccess(user, document)) {
     await logAuditEvent({
       actor_id: user.id,
       action: 'document_delete_denied',
@@ -421,11 +438,9 @@ export async function deleteDocument(documentId: string): Promise<{ error: strin
     return { error: 'Only the owner can delete this document' };
   }
 
-  await serviceClient.storage.from(STORAGE_BUCKET).remove([document.storage_key]);
-
   const { error: deleteError } = await serviceClient
     .from('documents')
-    .delete()
+    .update({ status: 'deleted' })
     .eq('id', documentId);
 
   if (deleteError) {
@@ -470,7 +485,7 @@ export async function grantPermission(
 
   const document = doc as Document;
 
-  if (document.owner_id !== user.id) {
+  if (!await canManageDocumentAccess(user, document)) {
     await logAuditEvent({
       actor_id: user.id,
       action: 'permission_grant_denied',
@@ -489,12 +504,16 @@ export async function grantPermission(
 
   const { data: targetProfile } = await serviceClient
     .from('profiles')
-    .select('status')
+    .select('status, role')
     .eq('id', targetUserId)
     .maybeSingle();
 
   if (!targetProfile || targetProfile.status !== 'active') {
     return { error: 'Target user not found or inactive' };
+  }
+
+  if (accessLevel === 'edit' && targetProfile.role === 'viewer') {
+    return { error: 'Viewer accounts can only receive read access' };
   }
 
   const { data: existing } = await serviceClient
@@ -558,7 +577,7 @@ export async function revokePermission(
 
   const document = doc as Document;
 
-  if (document.owner_id !== user.id) {
+  if (!await canManageDocumentAccess(user, document)) {
     await logAuditEvent({
       actor_id: user.id,
       action: 'permission_revoke_denied',
@@ -593,17 +612,18 @@ export async function revokePermission(
 }
 
 export async function searchUsers(query: string): Promise<Profile[]> {
-  const user = await requireAuthenticatedUser();
+  const user = await requireDocumentWriter();
   const serviceClient = createServiceClient();
 
-  const { data } = await serviceClient
+  const { data, error } = await serviceClient
     .from('profiles')
     .select('*')
     .eq('status', 'active')
     .neq('id', user.id)
-    .or(`email.ilike.%${query}%,display_name.ilike.%${query}%`)
+    .or(`email.ilike.%${safeSearch(query)}%,display_name.ilike.%${safeSearch(query)}%`)
     .limit(20);
 
+  if (error) throw error;
   return (data as Profile[]) || [];
 }
 
@@ -626,7 +646,7 @@ export async function getDocumentPermissions(documentId: string): Promise<{
 
   const document = doc as Document;
 
-  if (document.owner_id !== user.id) {
+  if (!await canManageDocumentAccess(user, document)) {
     return { permissions: [], error: 'Only the owner can view all permissions' };
   }
 

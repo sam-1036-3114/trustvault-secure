@@ -9,7 +9,7 @@ export async function GET() {
     return NextResponse.json(result);
   } catch (err) {
     if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: 401 });
+      return NextResponse.json({ error: err.message }, { status: err.code === 'UNAUTHENTICATED' ? 401 : 403 });
     }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

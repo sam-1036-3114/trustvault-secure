@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchJson } from '@/lib/fetch-json';
 import { useAuth } from '@/lib/auth-context';
 import { AppShell } from '@/components/sidebar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +18,7 @@ export default function AuditPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [integrity, setIntegrity] = useState<{ is_valid: boolean; total_events: number; verified_events: number } | null>(null);
   const [filterOutcome, setFilterOutcome] = useState<string>('all');
 
@@ -31,14 +33,14 @@ export default function AuditPage() {
       params.set('page', String(page));
       if (filterOutcome !== 'all') params.set('outcome', filterOutcome);
       Promise.all([
-        fetch(`/api/audit?${params}`).then(r => r.json()),
-        fetch('/api/audit/verify').then(r => r.json()),
+        fetch(`/api/audit?${params}`, { signal: AbortSignal.timeout(12000) }).then(async r => { if (!r.ok) throw new Error('Unable to load data. Please retry.'); return r.json(); }),
+        fetch('/api/audit/verify', { signal: AbortSignal.timeout(12000) }).then(async r => { if (!r.ok) throw new Error('Unable to load data. Please retry.'); return r.json(); }),
       ]).then(([auditData, intData]) => {
         setEvents(auditData.events || []);
         setTotal(auditData.total || 0);
         setIntegrity(intData);
         setDataLoading(false);
-      });
+      }).catch(() => { setLoadError('Unable to load audit data. Please retry.'); setDataLoading(false); });
     }
   }, [user, page, filterOutcome]);
 
@@ -46,6 +48,7 @@ export default function AuditPage() {
 
   return (
     <AppShell>
+      {loadError && <p role="alert" className="mb-4 rounded border p-4">{loadError} <button className="text-primary underline" onClick={() => window.location.reload()}>Retry</button></p>}
       <div className="mb-6">
         <h1 className="text-2xl font-bold">Audit Trail</h1>
         <p className="mt-1 text-sm text-muted-foreground">Tamper-evident log of all security events</p>
@@ -63,7 +66,7 @@ export default function AuditPage() {
             </p>
           </div>
           <Badge variant={integrity?.is_valid ? 'default' : 'destructive'}>
-            {integrity?.is_valid ? 'Chain Valid' : 'Chain Tampered'}
+            {!integrity ? 'Unavailable' : integrity.is_valid ? 'Chain Valid' : 'Chain Tampered'}
           </Badge>
         </CardContent>
       </Card>

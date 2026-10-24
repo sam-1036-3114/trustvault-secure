@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchJson } from '@/lib/fetch-json';
 import { useAuth } from '@/lib/auth-context';
 import { AppShell } from '@/components/sidebar';
 import { Card, CardContent } from '@/components/ui/card';
@@ -25,6 +26,8 @@ export default function DocumentsPage() {
   const { toast } = useToast();
   const [documents, setDocuments] = useState<DocWithMeta[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [dataLoading, setDataLoading] = useState(true);
@@ -40,24 +43,26 @@ export default function DocumentsPage() {
     if (!loading && !user) router.push('/login');
   }, [loading, user, router]);
 
-  const fetchDocs = useCallback(async () => {
+  const fetchDocs = useCallback(async (signal?: AbortSignal) => {
     if (!user) return;
-    setDataLoading(true);
-    const params = new URLSearchParams();
+    setDataLoading(true); setLoadError('');
+    const params = new URLSearchParams({ page: String(page), pageSize: '20' });
     if (search) params.set('search', search);
     if (category !== 'all') params.set('category', category);
-    const res = await fetch(`/api/documents?${params}`);
-    const data = await res.json();
-    if (data.documents) {
-      setDocuments(data.documents);
-      setTotal(data.total);
-    }
-    setDataLoading(false);
-  }, [user, search, category]);
+    try {
+      const data = await fetchJson(`/api/documents?${params}`, { signal });
+      if (signal?.aborted) return;
+      setDocuments(data.documents); setTotal(data.total);
+    } catch (error) {
+      if (!signal?.aborted) setLoadError(error instanceof Error ? error.message : 'Unable to load documents.');
+    } finally { if (!signal?.aborted) setDataLoading(false); }
+  }, [user, search, category, page]);
 
   useEffect(() => {
-    const timer = setTimeout(fetchDocs, 300);
-    return () => clearTimeout(timer);
+    const controller = new AbortController();
+
+    const timer = setTimeout(() => { void fetchDocs(controller.signal); }, 300);
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [fetchDocs]);
 
   const handleUpload = async () => {
@@ -69,7 +74,8 @@ export default function DocumentsPage() {
     formData.append('category', uploadCategory);
     formData.append('description', uploadDescription);
 
-    const res = await fetch('/api/documents', { method: 'POST', body: formData });
+    try {
+    const res = await fetch('/api/documents', { method: 'POST', body: formData, signal: AbortSignal.timeout(20000) });
     const data = await res.json();
     setUploading(false);
 
@@ -83,10 +89,13 @@ export default function DocumentsPage() {
       setUploadDescription('');
       fetchDocs();
     }
+    } catch { toast({ title: 'Upload failed', description: 'Unable to upload. Please retry.', variant: 'destructive' }); }
+    finally { setUploading(false); }
   };
 
   const handleDelete = async (id: string, title: string) => {
     if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
+    try {
     const res = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.error) {
@@ -95,6 +104,7 @@ export default function DocumentsPage() {
       toast({ title: 'Document Deleted', description: `${title} has been deleted` });
       fetchDocs();
     }
+    } catch { toast({ title: 'Request failed', description: 'Unable to connect. Please retry.', variant: 'destructive' }); }
   };
 
   const handleDownload = async (id: string) => {
@@ -170,11 +180,11 @@ export default function DocumentsPage() {
           <Input
             placeholder="Search documents..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             className="pl-9"
           />
         </div>
-        <Select value={category} onValueChange={setCategory}>
+        <Select value={category} onValueChange={value => { setCategory(value); setPage(1); }}>
           <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {categories.map(c => (
@@ -188,6 +198,7 @@ export default function DocumentsPage() {
         </div>
       </div>
 
+      {loadError && <p role="alert" className="mb-4 rounded border p-4">{loadError} <button className="text-primary underline" onClick={() => { void fetchDocs(); }}>Retry</button></p>}
       {dataLoading ? (
         <div className="space-y-3">
           {[...Array(5)].map((_, i) => <div key={i} className="h-16 animate-pulse rounded-md bg-muted" />)}
@@ -241,7 +252,7 @@ export default function DocumentsPage() {
                       <Button size="sm" variant="ghost" onClick={() => handleDownload(doc.id)}>
                         <Download className="h-4 w-4" />
                       </Button>
-                      {doc.access_level === 'owner' && (
+                      {profile.role !== 'viewer' && doc.access_level === 'owner' && (
                         <Button size="sm" variant="ghost" onClick={() => handleDelete(doc.id, doc.title)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
@@ -276,7 +287,7 @@ export default function DocumentsPage() {
                   <Button size="sm" variant="outline" onClick={() => handleDownload(doc.id)}>
                     <Download className="h-4 w-4" />
                   </Button>
-                  {doc.access_level === 'owner' && (
+                  {profile.role !== 'viewer' && doc.access_level === 'owner' && (
                     <Button size="sm" variant="ghost" onClick={() => handleDelete(doc.id, doc.title)}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
@@ -287,6 +298,11 @@ export default function DocumentsPage() {
           ))}
         </div>
       )}
+      {total > 20 && <div className="mt-6 flex items-center justify-center gap-4">
+        <Button variant="outline" disabled={page === 1 || dataLoading} onClick={() => setPage(p => p - 1)}>Previous</Button>
+        <span>Page {page} of {Math.ceil(total / 20)}</span>
+        <Button variant="outline" disabled={page * 20 >= total || dataLoading} onClick={() => setPage(p => p + 1)}>Next</Button>
+      </div>}
     </AppShell>
   );
 }

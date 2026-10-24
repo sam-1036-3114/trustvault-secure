@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdministrator, AuthError } from '@/lib/auth';
 import { createServiceClient } from '@/lib/supabase-server';
@@ -7,11 +8,12 @@ export async function GET() {
   try {
     await requireAdministrator();
     const serviceClient = createServiceClient();
-    const { data } = await serviceClient
+    const { data, error } = await serviceClient
       .from('profiles')
       .select('*')
       .order('created_at', { ascending: false });
 
+    if (error) throw error;
     return NextResponse.json({ users: data || [] });
   } catch (err) {
     if (err instanceof AuthError) {
@@ -25,7 +27,9 @@ export async function PATCH(req: NextRequest) {
   try {
     const admin = await requireAdministrator();
     const body = await req.json();
-    const { user_id, role, status } = body;
+    const parsed = z.object({ user_id: z.string().uuid(), role: z.enum(['admin', 'owner', 'viewer']).optional(), status: z.enum(['active', 'suspended']).optional() }).strict().safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid user update' }, { status: 400 });
+    const { user_id, role, status } = parsed.data;
 
     if (!user_id) {
       return NextResponse.json({ error: 'user_id required' }, { status: 400 });

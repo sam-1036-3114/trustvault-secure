@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchJson } from '@/lib/fetch-json';
 import { useAuth } from '@/lib/auth-context';
 import { AppShell } from '@/components/sidebar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +20,7 @@ export default function AdminUsersPage() {
   const { toast } = useToast();
   const [users, setUsers] = useState<Profile[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     if (!loading && !user) router.push('/login');
@@ -27,14 +29,15 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     if (user && profile?.role === 'admin') {
-      fetch('/api/admin/users')
-        .then(r => r.json())
+      fetch('/api/admin/users', { signal: AbortSignal.timeout(12000) })
+        .then(async r => { if (!r.ok) throw new Error('Unable to load data. Please retry.'); return r.json(); })
         .then(data => { setUsers(data.users || []); setDataLoading(false); })
-        .catch(() => setDataLoading(false));
+        .catch(() => { setLoadError('Unable to load data. Please retry.'); setDataLoading(false); });
     }
   }, [user, profile]);
 
   const handleUpdateUser = async (userId: string, field: 'role' | 'status', value: string) => {
+    try {
     const res = await fetch('/api/admin/users', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -47,6 +50,7 @@ export default function AdminUsersPage() {
       toast({ title: 'User Updated' });
       setUsers(users.map(u => u.id === userId ? data.user : u));
     }
+    } catch { toast({ title: 'Request failed', description: 'Unable to connect. Please retry.', variant: 'destructive' }); }
   };
 
   if (loading || !user || !profile) return null;
@@ -54,6 +58,7 @@ export default function AdminUsersPage() {
 
   return (
     <AppShell>
+      {loadError && <p role="alert" className="mb-4 rounded border p-4">{loadError} <button className="text-primary underline" onClick={() => window.location.reload()}>Retry</button></p>}
       <div className="mb-6">
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <UserCog className="h-6 w-6" />

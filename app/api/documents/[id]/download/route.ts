@@ -18,6 +18,8 @@ export async function GET(
 
     return new NextResponse(result.data, {
       headers: {
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff',
         'Content-Type': result.contentType || 'application/octet-stream',
         'Content-Disposition': `attachment; filename="${result.fileName}"`,
         'Content-Length': result.data.byteLength.toString(),

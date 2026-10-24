@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, use } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchJson } from '@/lib/fetch-json';
 import { useAuth } from '@/lib/auth-context';
 import { AppShell, BackButton } from '@/components/sidebar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,8 +17,8 @@ import { Download, Trash2, Shield, FileText, Users, Activity, Loader2, UserPlus 
 import { useToast } from '@/hooks/use-toast';
 import type { Document, Profile, DocumentPermission, DocumentVersion } from '@/lib/types';
 
-export default function DocumentDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function DocumentDetailPage({ params }: { params: { id: string } }) {
+  const { id } = params;
   const { user, profile, loading } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
@@ -28,6 +29,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState('');
   const [editMode, setEditMode] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editCategory, setEditCategory] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -43,13 +45,14 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
   useEffect(() => {
     if (user) {
-      fetch(`/api/documents/${id}`)
-        .then(r => r.json())
+      fetch(`/api/documents/${id}`, { signal: AbortSignal.timeout(12000) })
+        .then(async r => { if (!r.ok) throw new Error('Unable to load data. Please retry.'); return r.json(); })
         .then(data => {
           if (data.error) {
             setError(data.error);
           } else {
             setDoc(data.document);
+            setCanEdit(data.canEdit === true);
             setOwner(data.owner);
             setPermissions(data.permissions || []);
             setVersions(data.versions || []);
@@ -74,6 +77,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
   const handleDelete = async () => {
     if (!confirm(`Delete "${doc?.title}"? This cannot be undone.`)) return;
+    try {
     const res = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.error) {
@@ -82,9 +86,11 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       toast({ title: 'Document Deleted' });
       router.push('/documents');
     }
+    } catch { toast({ title: 'Request failed', description: 'Unable to connect. Please retry.', variant: 'destructive' }); }
   };
 
   const handleSaveEdit = async () => {
+    try {
     const res = await fetch(`/api/documents/${id}/metadata`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -98,6 +104,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       setEditMode(false);
       toast({ title: 'Document Updated' });
     }
+    } catch { toast({ title: 'Request failed', description: 'Unable to connect. Please retry.', variant: 'destructive' }); }
   };
 
   const searchUsers = async (query: string) => {
@@ -106,13 +113,16 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       setSearchResults([]);
       return;
     }
-    const res = await fetch(`/api/users/search?q=${encodeURIComponent(query)}`);
+    try {
+    const res = await fetch(`/api/users/search?q=${encodeURIComponent(query)}`, { signal: AbortSignal.timeout(12000) });
     const data = await res.json();
     setSearchResults(data.users || []);
+    } catch { toast({ title: 'Request failed', description: 'Unable to connect. Please retry.', variant: 'destructive' }); }
   };
 
   const handleGrant = async () => {
     if (!selectedUser) return;
+    try {
     const res = await fetch(`/api/documents/${id}/permissions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -127,14 +137,16 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       setSelectedUser('');
       setUserSearch('');
       setSearchResults([]);
-      const detailRes = await fetch(`/api/documents/${id}`);
+      const detailRes = await fetch(`/api/documents/${id}`, { signal: AbortSignal.timeout(12000) });
       const detailData = await detailRes.json();
       setPermissions(detailData.permissions || []);
     }
+    } catch { toast({ title: 'Request failed', description: 'Unable to connect. Please retry.', variant: 'destructive' }); }
   };
 
   const handleRevoke = async (userId: string) => {
     if (!confirm('Revoke access for this user?')) return;
+    try {
     const res = await fetch(`/api/permissions/${id}/${userId}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.error) {
@@ -143,6 +155,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       toast({ title: 'Access Revoked' });
       setPermissions(permissions.filter(p => p.user_id !== userId));
     }
+    } catch { toast({ title: 'Request failed', description: 'Unable to connect. Please retry.', variant: 'destructive' }); }
   };
 
   if (loading || dataLoading) {
@@ -200,11 +213,9 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
             <Download className="mr-2 h-4 w-4" />
             Download
           </Button>
+          {canEdit && <Button variant="outline" onClick={() => setEditMode(!editMode)}>{editMode ? 'Cancel' : 'Edit'}</Button>}
           {isOwner && (
             <>
-              <Button variant="outline" onClick={() => setEditMode(!editMode)}>
-                {editMode ? 'Cancel' : 'Edit'}
-              </Button>
               <Dialog open={shareOpen} onOpenChange={setShareOpen}>
                 <DialogTrigger asChild>
                   <Button>

@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ users });
   } catch (err) {
     if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: 401 });
+      return NextResponse.json({ error: err.message }, { status: err.code === 'UNAUTHENTICATED' ? 401 : 403 });
     }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

@@ -22,13 +22,14 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    await requireAuthenticatedUser();
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
     const title = formData.get('title') as string;
     const description = (formData.get('description') as string) || '';
     const category = (formData.get('category') as string) || 'general';
 
-    if (!file) {
+    if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
 

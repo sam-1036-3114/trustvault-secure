@@ -25,14 +25,11 @@ export async function logAuditEvent(params: AuditParams): Promise<string | null>
       p_chain_id: 'main',
     });
 
-    if (error) {
-      console.error('Audit log error:', error.message);
-      return null;
-    }
+    if (error) throw new Error('Audit event could not be recorded');
     return data as string;
-  } catch (err) {
-    console.error('Audit log exception:', err);
-    return null;
+  } catch {
+    // Never log raw SDK errors: request details can contain credentials or metadata.
+    throw new Error('Audit service unavailable');
   }
 }
 
@@ -42,5 +39,7 @@ export async function verifyAuditIntegrity() {
     p_chain_id: 'main',
   });
   if (error) throw error;
-  return data;
+  const result = Array.isArray(data) ? data[0] : data;
+  if (!result) throw new Error('Audit verification unavailable');
+  return result;
 }

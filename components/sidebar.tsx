@@ -83,6 +83,8 @@ export function Sidebar() {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const { profile, signOut } = useAuth();
+  if (profile?.status === 'suspended') return <div role="alert" className="mx-auto max-w-md space-y-4 p-8"><h1 className="text-xl font-bold">Account suspended</h1><p>Contact your administrator to restore access.</p><button className="text-primary underline" onClick={() => { void signOut().then(() => { window.location.href = '/login'; }); }}>Sign out</button></div>;
   return (
     <div className="min-h-screen bg-background">
       <Sidebar />
